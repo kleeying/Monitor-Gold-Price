@@ -5,7 +5,11 @@ from playwright.sync_api import sync_playwright
 URL = "https://www.uobgroup.com/online-rates/gold-and-silver-prices.page"
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
-CHAT_ID_2 = os.environ.get("TELEGRAM_CHAT_ID_2")  # optional second recipient
+# optional extra recipients of the price-drop alert
+EXTRA_CHAT_IDS = [
+    os.environ.get("TELEGRAM_CHAT_ID_2"),
+    os.environ.get("TELEGRAM_CHAT_ID_3"),
+]
 API = f"https://api.telegram.org/bot{TOKEN}"
 STATE = pathlib.Path("state.txt")
 THRESHOLD_FILE = pathlib.Path("threshold.txt")
@@ -16,16 +20,17 @@ def send(text):
                       data={"chat_id": CHAT_ID, "text": text}, timeout=30)
     r.raise_for_status()
 
-def send_second(text):
-    """Send a message to the second person, if one is set up."""
-    if not CHAT_ID_2:
-        return
-    try:
-        r = requests.post(f"{API}/sendMessage",
-                          data={"chat_id": CHAT_ID_2, "text": text}, timeout=30)
-        r.raise_for_status()
-    except Exception as e:
-        print(f"Could not send to second user: {type(e).__name__}")
+def send_extras(text):
+    """Send a message to each extra recipient that has been set up."""
+    for number, chat_id in enumerate(EXTRA_CHAT_IDS, start=2):
+        if not chat_id:
+            continue
+        try:
+            r = requests.post(f"{API}/sendMessage",
+                              data={"chat_id": chat_id, "text": text}, timeout=30)
+            r.raise_for_status()
+        except Exception as e:
+            print(f"Could not send to person {number}: {type(e).__name__}")
 
 def read_commands():
     """Read new messages sent to the bot. Returns (new_threshold, status_requested)."""
@@ -103,11 +108,11 @@ if status_requested:
     send(f"UOB Argor cast bar 100g: bank sells SGD {price:,.2f}.\n"
          f"Your alert price: SGD {threshold:,.2f}.")
 
-# 3. Send the price-drop alert to both people
+# 3. Send the price-drop alert to everyone
 if current == "below" and previous != "below":
     alert = (f"UOB Argor cast bar 100g: bank sells SGD {price:,.2f}, "
              f"below the alert price of SGD {threshold:,.2f}.\n{URL}")
     send(alert)
-    send_second(alert)
+    send_extras(alert)
 
 STATE.write_text(current)
