@@ -5,14 +5,27 @@ from playwright.sync_api import sync_playwright
 URL = "https://www.uobgroup.com/online-rates/gold-and-silver-prices.page"
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+CHAT_ID_2 = os.environ.get("TELEGRAM_CHAT_ID_2")  # optional second recipient
 API = f"https://api.telegram.org/bot{TOKEN}"
 STATE = pathlib.Path("state.txt")
 THRESHOLD_FILE = pathlib.Path("threshold.txt")
 
 def send(text):
+    """Send a message to you (the owner)."""
     r = requests.post(f"{API}/sendMessage",
                       data={"chat_id": CHAT_ID, "text": text}, timeout=30)
     r.raise_for_status()
+
+def send_second(text):
+    """Send a message to the second person, if one is set up."""
+    if not CHAT_ID_2:
+        return
+    try:
+        r = requests.post(f"{API}/sendMessage",
+                          data={"chat_id": CHAT_ID_2, "text": text}, timeout=30)
+        r.raise_for_status()
+    except Exception as e:
+        print(f"Could not send to second user: {type(e).__name__}")
 
 def read_commands():
     """Read new messages sent to the bot. Returns (new_threshold, status_requested)."""
@@ -22,7 +35,7 @@ def read_commands():
     new_threshold, status = None, False
     for u in updates:
         msg = u.get("message") or {}
-        # ignore messages from anyone except you
+        # only the owner can give commands; everyone else is ignored
         if str(msg.get("chat", {}).get("id")) != str(CHAT_ID):
             continue
         text = (msg.get("text") or "").strip()
@@ -44,6 +57,7 @@ def get_price():
                        "(KHTML, like Gecko) Chrome/126.0 Safari/537.36",
             locale="en-SG")
         page.goto(URL, wait_until="domcontentloaded", timeout=60000)
+        # wait until the price table has been filled in
         page.wait_for_function(
             "document.querySelectorAll('table tr td').length > 8", timeout=60000)
         rows = page.eval_on_selector_all(
@@ -52,9 +66,9 @@ def get_price():
             ".map(c => c.innerText.trim()))")
         browser.close()
 
-    sell_col = 2
+    sell_col = 2  # DESCRIPTION, UNIT, BANK SELLS, BANK BUYS
     for cells in rows:
-        print(cells)
+        print(cells)  # shown in the run log, useful for troubleshooting
         for i, c in enumerate(cells):
             if "BANK SELLS" in c.upper():
                 sell_col = i
@@ -76,7 +90,7 @@ previous = STATE.read_text().strip() if STATE.exists() else "above"
 
 if new_threshold is not None:
     threshold = new_threshold
-    previous = "above"  # re-arm, so you are alerted if price is already below
+    previous = "above"  # re-arm, so an alert is sent if price is already below
     send(f"Alert price set to SGD {threshold:,.2f}.")
 THRESHOLD_FILE.write_text(str(threshold))
 
@@ -89,8 +103,11 @@ if status_requested:
     send(f"UOB Argor cast bar 100g: bank sells SGD {price:,.2f}.\n"
          f"Your alert price: SGD {threshold:,.2f}.")
 
+# 3. Send the price-drop alert to both people
 if current == "below" and previous != "below":
-    send(f"UOB Argor cast bar 100g: bank sells SGD {price:,.2f}, "
-         f"below your alert price of SGD {threshold:,.2f}.\n{URL}")
+    alert = (f"UOB Argor cast bar 100g: bank sells SGD {price:,.2f}, "
+             f"below the alert price of SGD {threshold:,.2f}.\n{URL}")
+    send(alert)
+    send_second(alert)
 
 STATE.write_text(current)
